@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="fr"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Carte POI</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<style>
+:root{box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);--bg:#f4f5f7;--card:#fff;--tx:#14171c;--mut:#6b7280;--ac:#d9480f;--bd:#dfe3e8}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#101319;--card:#1a1f28;--tx:#eceff4;--mut:#98a2b3;--ac:#ff7a3d;--bd:#2c3441}}
+:root[data-theme="dark"]{--bg:#101319;--card:#1a1f28;--tx:#eceff4;--mut:#98a2b3;--ac:#ff7a3d;--bd:#2c3441}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.4 system-ui,-apple-system,Segoe UI,sans-serif;padding:14px;max-width:720px;margin-inline:auto}
+h1{font-size:20px;margin:0 0 12px}h2{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--mut);margin:0 0 8px}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:12px;margin-bottom:12px}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px}
+button,select,input{font:inherit;font-size:16px;color:var(--tx);background:var(--bg);border:1px solid var(--bd);border-radius:8px;padding:8px 10px}
+button{cursor:pointer}.chip.on,.pri{background:var(--ac);color:#fff;border-color:var(--ac)}
+input{width:100%;box-sizing:border-box;margin-bottom:8px}.row{display:flex;gap:6px;flex-wrap:wrap}
+.poi{border-top:1px solid var(--bd);padding-top:10px;margin-top:10px}
+.poi b{font-size:16px}.mut{color:var(--mut);font-size:13px}
+pre{white-space:pre-wrap;word-break:break-word;background:var(--bg);border:1px solid var(--bd);border-radius:8px;padding:10px;margin:0 0 8px;max-width:100%;overflow-x:auto}
+a{color:var(--ac)}#map{height:360px;border-radius:10px;margin-bottom:8px;border:1px solid var(--bd)}input[type=checkbox]{width:22px;height:22px;margin:0 8px 0 0;vertical-align:middle}.tlr{display:flex;gap:6px;align-items:center;margin-bottom:6px}.tlr b{min-width:34px}.tlr input{margin:0}button:disabled{opacity:.45}.lbl{background:var(--ac);color:#fff;border:0;font-weight:600}
+</style></head><body>
+<h1>📍 Carte & message d'équipe</h1>
+
+<div class="card"><h2>1 · Ajouter un POI</h2>
+<div id="map"></div>
+<p class="mut">Clique sur la carte pour placer le point, choisis un nom, puis « Ajouter ».</p>
+<div class="chips" id="names"></div>
+<input id="cname" placeholder="…ou un autre nom">
+<input id="coords" placeholder="Coordonnées (remplies au clic) ou lien Google Maps">
+<div class="row">
+<button onclick="geo()">📌 Ma position</button>
+<button class="pri" onclick="add()">+ Ajouter</button></div>
+<p class="mut" id="msg"></p></div>
+
+<div class="card"><h2>2 · Rôles & missions</h2><div id="bulk"></div><div id="list"><p class="mut">Aucun POI pour l'instant.</p></div>
+<input id="newm" placeholder="Nouvelle mission (ex : EMD de …) puis Entrée"></div>
+
+<div class="card"><h2>3 · Chronologie</h2><div id="tl"></div></div>
+
+<div class="card"><h2>4 · Message prêt à envoyer</h2>
+<input id="title" placeholder="Titre (optionnel)">
+<pre id="out"></pre>
+<div class="row"><button class="pri" onclick="copy()">📋 Copier</button>
+<button onclick="wa()">WhatsApp</button><button onclick="share()">Partager…</button>
+<button onclick="reset()">Tout effacer</button></div></div>
+
+<script>
+const NAMES=["Dabo","Gaby","Marco","Net","Joël","Pulch","Hach","Dany"];
+const ROLES=["30","70","Drakkar","Poseur / Sécu"];
+let missions=["EMD de prendre le 45 toutes Tions","EMD de faire de Ping-Pong","EMD d'annoncer tout mouvement dans la zone"];
+let pois=[],sel="",chk=new Set(),tl=Array(10).fill("");
+const $=i=>document.getElementById(i);
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+try{const d=JSON.parse(localStorage.getItem("poi-app")||"null");if(d){pois=d.pois||[];missions=d.missions||missions;$("title").value=d.title||"";if(Array.isArray(d.tl))tl=d.tl.concat(Array(10).fill("")).slice(0,10)}}catch(e){}
+function save(){try{localStorage.setItem("poi-app",JSON.stringify({pois,missions,tl,title:$("title").value}))}catch(e){}}
+let map=null,mk=null,tmp=null,fit=true;
+try{
+ const sat=L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",{maxZoom:19,attribution:"Imagery © Esri, Maxar, Earthstar Geographics"});
+ const lab=L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}",{maxZoom:19});
+ const osm=L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png",{maxZoom:19,attribution:"© OpenStreetMap contributors"});
+ map=L.map("map",{layers:[sat,lab]}).setView([46.6,2.4],5);
+ L.control.layers({"Satellite":sat,"OpenStreetMap":osm},{"Noms de lieux":lab}).addTo(map);
+ mk=L.layerGroup().addTo(map);
+ map.on("click",e=>{setTmp(e.latlng.lat,e.latlng.lng);note("Point placé — choisis un nom puis Ajouter.")});
+}catch(e){map=null;$("map").innerHTML='<p class="mut" style="padding:12px">La carte ne peut pas se charger ici (page ouverte hors navigateur ou sans internet). Tu peux quand même coller des coordonnées ou un lien Google Maps ci-dessous.</p>'}
+function setTmp(a,b){$("coords").value=a.toFixed(6)+", "+b.toFixed(6);if(!map)return;if(tmp)map.removeLayer(tmp);tmp=L.circleMarker([a,b],{radius:9,color:"#fff",fillColor:"#2563eb",fillOpacity:1}).addTo(map)}
+$("coords").addEventListener("change",()=>{const c=parse($("coords").value);if(c&&map){setTmp(c[0],c[1]);map.setView(c,Math.max(map.getZoom(),16))}});
+function drawMarkers(){if(!map)return;mk.clearLayers();pois.forEach(p=>L.marker([p.lat,p.lng]).bindTooltip(p.name+(p.role?" · "+p.role:""),{permanent:true,direction:"top",className:"lbl"}).addTo(mk));
+ if(fit&&pois.length){map.fitBounds(L.latLngBounds(pois.map(p=>[p.lat,p.lng])).pad(.3),{maxZoom:17});fit=false}}
+function note(t){$("msg").textContent=t}
+function drawNames(){$("names").innerHTML=NAMES.map(n=>`<button class="chip ${sel===n?"on":""}" onclick="sel='${n}';$('cname').value='';drawNames()">${n}</button>`).join("")}
+function parse(s){
+ let m=s.match(/!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)/)||s.match(/(-?\d{1,3}\.\d+)\s*[,; ]\s*(-?\d{1,3}\.\d+)/);
+ if(!m)return null;const a=+m[1],b=+m[2];return Math.abs(a)<=90&&Math.abs(b)<=180?[a,b]:null}
+function add(){
+ const name=$("cname").value.trim()||sel;if(!name){note("Choisis ou écris un nom.");return}
+ const c=parse($("coords").value);if(!c){note("Coordonnées non reconnues. Exemple : 16.0123, -61.7456");return}
+ pois.push({id:Date.now(),name,lat:c[0],lng:c[1],role:"",missions:[]});if(tmp&&map){map.removeLayer(tmp);tmp=null}
+ $("coords").value="";$("cname").value="";sel="";drawNames();note("POI ajouté ✔");render()}
+function geo(){
+ if(!navigator.geolocation){note("Géolocalisation indisponible.");return}
+ navigator.geolocation.getCurrentPosition(p=>{setTmp(p.coords.latitude,p.coords.longitude);if(map)map.setView([p.coords.latitude,p.coords.longitude],17);note("Position récupérée — choisis un nom puis Ajouter.")},()=>note("Position refusée ou indisponible."))}
+function setRole(id,v){pois.find(p=>p.id===id).role=v;render()}
+function togM(id,m){const p=pois.find(p=>p.id===id),i=p.missions.indexOf(m);i<0?p.missions.push(m):p.missions.splice(i,1);render()}
+function del(id){pois=pois.filter(p=>p.id!==id);chk.delete(id);render()}
+function tg(id){chk.has(id)?chk.delete(id):chk.add(id);render()}
+function selAll(v){chk=new Set(v?pois.map(p=>p.id):[]);render()}
+const sp=()=>pois.filter(p=>chk.has(p.id));
+function bulkRole(i){const r=ROLES[i],l=sp(),same=l.every(p=>p.role===r);l.forEach(p=>p.role=same?"":r);render()}
+function bulkM(i){const m=missions[i],l=sp(),all=l.every(p=>p.missions.includes(m));l.forEach(p=>{const k=p.missions.indexOf(m);if(all)p.missions.splice(k,1);else if(k<0)p.missions.push(m)});render()}
+function drawBulk(){
+ if(!pois.length){$("bulk").innerHTML="";return}
+ const l=sp(),n=l.length,d=n?"":"disabled";
+ $("bulk").innerHTML=`<div class="mut" style="margin-bottom:6px"><b>Pour plusieurs POI à la fois</b> — coche les noms ci-dessous (${n} sélectionné${n>1?"s":""}), puis choisis le rôle / la mission à leur donner.</div>
+ <div class="row" style="margin-bottom:6px"><button onclick="selAll(true)">Tout cocher</button><button onclick="selAll(false)">Tout décocher</button></div>
+ <div class="chips">${ROLES.map((r,i)=>`<button ${d} class="chip ${n&&l.every(p=>p.role===r)?"on":""}" onclick="bulkRole(${i})">${r}</button>`).join("")}</div>
+ <div class="chips">${missions.map((m,i)=>`<button ${d} class="chip ${n&&l.every(p=>p.missions.includes(m))?"on":""}" onclick="bulkM(${i})">${esc(m)}</button>`).join("")}</div>`}
+function drawTl(){$("tl").innerHTML=tl.map((v,i)=>`<div class="tlr"><b>T${i+1} :</b><input value="${esc(v)}" placeholder="Action au T${i+1}" oninput="tl[${i}]=this.value;out();save()"></div>`).join("")}
+drawTl();
+$("newm").addEventListener("keydown",e=>{if(e.key==="Enter"&&e.target.value.trim()){missions.push(e.target.value.trim());e.target.value="";render()}});
+$("title").addEventListener("input",()=>{out();save()});
+const link=p=>`https://www.google.com/maps?q=${p.lat},${p.lng}`;
+function render(){
+ $("list").innerHTML=pois.length?pois.map(p=>`<div class="poi"><div class="row" style="justify-content:space-between"><label><input type="checkbox" ${chk.has(p.id)?"checked":""} onchange="tg(${p.id})"><b>${esc(p.name)}</b></label><button onclick="del(${p.id})">🗑</button></div>
+ <div class="mut"><a href="${link(p)}" target="_blank" rel="noopener">${p.lat.toFixed(5)}, ${p.lng.toFixed(5)}</a></div>
+ <div class="chips" style="margin-top:6px">${ROLES.map(r=>`<button class="chip ${p.role===r?"on":""}" onclick="setRole(${p.id},p.role==='${r}'?'':'${r}')">${r}</button>`.replace("p.role===","'"+p.role+"'===").replace("(${p.id},p.role","("+p.id+",'"+p.role+"'")).join("")}</div>
+ <div class="chips">${missions.map((m,i)=>`<button class="chip ${p.missions.includes(m)?"on":""}" onclick="togM(${p.id},missions[${i}])">${esc(m)}</button>`).join("")}</div></div>`).join(""):'<p class="mut">Aucun POI pour l\'instant.</p>';
+
+ drawBulk();drawMarkers();out();save()}
+function text(){
+ const t=$("title").value.trim();
+ const b=pois.map(p=>`📍 ${p.name}${p.role?" — "+p.role:""}\n${p.missions.map(m=>"• "+m).join("\n")}${p.missions.length?"\n":""}${link(p)}`).join("\n\n");
+ const c=tl.map((v,i)=>v.trim()?`T${i+1} : ${v.trim()}`:"").filter(Boolean).join("\n");
+ return (t?t+"\n\n":"")+(b||"(ajoute des POI)")+(c?"\n\n⏱ Chronologie\n"+c:"")}
+function out(){$("out").textContent=text()}
+async function copy(){try{await navigator.clipboard.writeText(text());note("Message copié ✔")}catch(e){const r=document.createRange();r.selectNodeContents($("out"));getSelection().removeAllRanges();getSelection().addRange(r);note("Sélectionné : fais Copier manuellement.")}}
+function wa(){window.open("https://wa.me/?text="+encodeURIComponent(text()),"_blank")}
+function share(){navigator.share?navigator.share({text:text()}).catch(()=>{}):copy()}
+function reset(){if(confirm("Effacer tous les POI ?")){pois=[];render()}}
+drawNames();render();
+</script></body></html>
